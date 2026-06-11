@@ -6,6 +6,12 @@ out
 dist
 *.tgz
 
+# local database
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
 # code coverage
 coverage
 *.lcov

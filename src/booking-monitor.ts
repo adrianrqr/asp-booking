@@ -1,6 +1,7 @@
 import { Cron } from "croner";
 import { fetchAvailableBookingSlots } from "./api";
 import type { BookingCheck, BookingSlots } from "./types";
+import { StateStore } from "./state-store";
 import { ResultErrors, type Result } from "./utils";
 import { getContentHash } from "./utils/hash";
 
@@ -12,12 +13,13 @@ type BookingMonitorError =
 
 export class BookingMonitor {
   private job?: Cron;
-  private previousHash?: string;
 
   constructor(
     private readonly onChanged: (slots: BookingSlots) => Promise<void>,
+    private readonly stateStore = new StateStore(),
   ) {}
 
+  //for debug "*/20 * * * * *" is 20seconds
   async start() {
     this.job = new Cron("*/10 * * * *", async () => {
       console.log("Cron running");
@@ -42,6 +44,7 @@ export class BookingMonitor {
   stop() {
     this.job?.stop();
     this.job = undefined;
+    this.stateStore.close();
   }
 
   async check(): Promise<Result<BookingCheck, BookingMonitorError>> {
@@ -52,15 +55,15 @@ export class BookingMonitor {
     }
 
     const hash = getContentHash(result.data);
-    const changed = hash !== this.previousHash;
+    const previousHash = this.stateStore.getBookingSlotsHash();
 
-    this.previousHash = hash;
+    this.stateStore.saveBookingSlotsHash(hash);
 
     return {
       ok: true,
       data: {
         slots: result.data,
-        changed,
+        changed: previousHash !== undefined && hash !== previousHash,
         hash,
       },
     };
