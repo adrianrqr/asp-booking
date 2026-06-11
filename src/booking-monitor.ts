@@ -19,9 +19,9 @@ export class BookingMonitor {
     private readonly stateStore = new StateStore(),
   ) {}
 
-  //for debug "*/20 * * * * *" is 20seconds
+  //for debug "*/20 * * * * *" is 20seconds"*/10 * * * *"
   async start() {
-    this.job = new Cron("*/10 * * * *", async () => {
+    this.job = new Cron("*/20 * * * * *", async () => {
       console.log("Cron running");
 
       const result = await this.check();

@@ -17,7 +17,12 @@ export class StateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
+      );
+
+      CREATE TABLE IF NOT EXISTS users (
+        chat_id INTEGER PRIMARY KEY,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
   }
 
@@ -41,6 +46,28 @@ export class StateStore {
            updated_at = CURRENT_TIMESTAMP`,
       )
       .run(BOOKING_SLOTS_HASH_KEY, hash);
+  }
+
+  subscribeUser(chatId: number): void {
+    this.db
+      .query("INSERT OR IGNORE INTO users (chat_id) VALUES (?)")
+      .run(chatId);
+  }
+
+  unsubscribeUser(chatId: number): boolean {
+    const result = this.db
+      .query("DELETE FROM users WHERE chat_id = ?")
+      .run(chatId);
+
+    return result.changes > 0;
+  }
+
+  getSubscribedChatIds(): number[] {
+    const rows = this.db
+      .query<{ chat_id: number }, []>("SELECT chat_id FROM users ORDER BY created_at ASC")
+      .all();
+
+    return rows.map((row) => row.chat_id);
   }
 
   close(): void {

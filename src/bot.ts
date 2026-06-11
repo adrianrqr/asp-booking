@@ -1,37 +1,56 @@
 import { Bot } from "grammy";
 import { fetchAvailableBookingSlots } from "./api";
 import { BookingMonitor } from "./booking-monitor";
+import { StateStore } from "./state-store";
 import type { BookingSlots } from "./types";
 
 export class LicenseBookingBot {
-  private subscribedChatIds: number[] = [+process.env.NOTIFY_CHAT_ID!];
+  private stateStore = new StateStore();
   private bot = new Bot(process.env.BOT_TOKEN!);
   private bookingMonitor = new BookingMonitor(async (slots) => {
-    for (const chatId of this.subscribedChatIds) {
+    for (const chatId of this.stateStore.getSubscribedChatIds()) {
       await this.bot.api.sendMessage(chatId, formatResults(slots));
     }
-  });
+  }, this.stateStore);
 
   constructor() {
-    this.bot.command("subscribe", async ({ chatId, reply }) => {
-      console.log(`Chat id ${chatId} subscribed`);
+    const defaultNotifyChatId = Number(process.env.NOTIFY_CHAT_ID);
 
-      this.subscribedChatIds.push(chatId);
+    if (Number.isSafeInteger(defaultNotifyChatId)) {
+      this.stateStore.subscribeUser(defaultNotifyChatId);
+    }
 
-      reply("You've been subscribed!");
+    this.bot.command("subscribe", async (ctx) => {
+      console.log(`Chat id ${ctx.chatId} subscribed`);
+
+      this.stateStore.subscribeUser(ctx.chatId);
+
+      await ctx.reply("You've been subscribed!");
+    });
+
+    this.bot.command("unsubscribe", async (ctx) => {
+      console.log(`Chat id ${ctx.chatId} unsubscribed`);
+
+      const wasSubscribed = this.stateStore.unsubscribeUser(ctx.chatId);
+
+      await ctx.reply(
+        wasSubscribed
+          ? "You've been unsubscribed."
+          : "You were not subscribed.",
+      );
     });
 
     this.bot.command("check", async (ctx) => {
       const result = await fetchAvailableBookingSlots();
 
-      if (!result.ok)
-        ctx.reply(
+      if (!result.ok) {
+        await ctx.reply(
           `Failed to fetch data.\nError:${result.error}\nMessage:${result.message}`,
         );
-
-      if (result.ok) {
-        ctx.reply(formatResults(result.data));
+        return;
       }
+
+      await ctx.reply(formatResults(result.data));
     });
   }
 
