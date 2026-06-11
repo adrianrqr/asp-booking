@@ -1,6 +1,6 @@
-export const getContentHash = (content: unknown) => {
+export const getContentHash = (content: string) => {
   const cryptoHasher = new Bun.CryptoHasher("sha256");
-  cryptoHasher.update(JSON.stringify(content));
+  cryptoHasher.update(content);
 
   return cryptoHasher.digest("hex");
 };

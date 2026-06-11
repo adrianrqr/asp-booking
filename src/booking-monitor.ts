@@ -1,34 +1,38 @@
 import { Cron } from "croner";
-import { fetchAvailableBookingSlots } from "./api";
-import type { BookingCheck, BookingSlots } from "./types";
-import { StateStore } from "./state-store";
-import { ResultErrors, type Result } from "./utils";
-import { getContentHash } from "./utils/hash";
+
+import type { BookingSlots } from "@api/api.types";
+import { fetchAvailableBookingSlots } from "@api/api";
+import type { Result } from "@utils/result";
+import type { BookingSnapshotRepository } from "@modules/booking-snapshot/booking-snapshot.repository";
+import { getContentHash } from "@utils/hash";
 
 type BookingMonitorError =
-  | typeof ResultErrors.RequestFailed
-  | typeof ResultErrors.InvalidResponse
-  | typeof ResultErrors.MissingConfig
-  | typeof ResultErrors.Unknown;
+  | "ErrorJobFetchFailed"
+  | "ErrorGettingLastHash"
+  | "ErrorCreatingSnapshot";
 
-export class BookingMonitor {
-  private job?: Cron;
+type BookingCheck = {
+  slots: BookingSlots;
+  changed: boolean;
+  hash: string;
+};
+
+export class BookingSnapshotWorker {
+  private cron?: Cron;
 
   constructor(
+    private readonly bookingSnapshotRepository: BookingSnapshotRepository,
     private readonly onChanged: (slots: BookingSlots) => Promise<void>,
-    private readonly stateStore = new StateStore(),
   ) {}
 
-  //for debug "*/20 * * * * *" is 20seconds"*/10 * * * *"
   async start() {
-    this.job = new Cron("*/20 * * * * *", async () => {
-      console.log("Cron running");
+    this.cron = new Cron("*/10 * * * *", async () => {
+      console.log("Cron started");
 
-      const result = await this.check();
+      const result = await this.job();
 
       if (!result.ok) {
-        console.error("Background booking check failed:", result);
-        return;
+        return console.error("Background booking check failed:", result);
       }
 
       if (result.data.changed) {
@@ -37,33 +41,53 @@ export class BookingMonitor {
         await this.onChanged(result.data.slots);
       }
     });
+  }
 
-    await this.job.trigger();
+  async trigger() {
+    await this.cron?.trigger();
   }
 
   stop() {
-    this.job?.stop();
-    this.job = undefined;
-    this.stateStore.close();
+    this.cron?.stop();
+    this.cron = undefined;
   }
 
-  async check(): Promise<Result<BookingCheck, BookingMonitorError>> {
+  private async job(): Promise<Result<BookingCheck, BookingMonitorError>> {
     const result = await fetchAvailableBookingSlots();
 
     if (!result.ok) {
-      return result;
+      console.error("ErrorJobFetchFailed");
+
+      return { ok: false, error: "ErrorJobFetchFailed" };
     }
 
-    const hash = getContentHash(result.data);
-    const previousHash = this.stateStore.getBookingSlotsHash();
+    const hash = getContentHash(JSON.stringify(result.data));
+    const latestHash = this.bookingSnapshotRepository.getLastSnapshotHash();
 
-    this.stateStore.saveBookingSlotsHash(hash);
+    if (!latestHash.ok && latestHash.error !== "ErrorSnapshotNoHashFound") {
+      return { ok: false, error: "ErrorGettingLastHash" };
+    }
+
+    const previousHash = latestHash.ok ? latestHash.data : undefined;
+    const changed = previousHash === undefined || previousHash !== hash;
+
+    if (changed) {
+      const createdSnapshot = this.bookingSnapshotRepository.createSnapshot({
+        hash,
+        raw: JSON.stringify(result.data),
+        timeSlots: result.data,
+      });
+
+      if (!createdSnapshot.ok) {
+        return { ok: false, error: "ErrorCreatingSnapshot" };
+      }
+    }
 
     return {
       ok: true,
       data: {
         slots: result.data,
-        changed: previousHash !== undefined && hash !== previousHash,
+        changed,
         hash,
       },
     };

@@ -1,67 +1,91 @@
 import { Bot } from "grammy";
-import { fetchAvailableBookingSlots } from "./api";
-import { BookingMonitor } from "./booking-monitor";
-import { StateStore } from "./state-store";
-import type { BookingSlots } from "./types";
+
+import { BookingSnapshotWorker } from "./booking-monitor";
+import type { SubscriptionRepository } from "./modules/subscriptions/subscription.repository";
+import { fetchAvailableBookingSlots } from "@api/api";
+import type { BookingSlots } from "@api/api.types";
 
 export class LicenseBookingBot {
-  private stateStore = new StateStore();
   private bot = new Bot(process.env.BOT_TOKEN!);
-  private bookingMonitor = new BookingMonitor(async (slots) => {
-    for (const chatId of this.stateStore.getSubscribedChatIds()) {
-      await this.bot.api.sendMessage(chatId, formatResults(slots));
-    }
-  }, this.stateStore);
+  private bookingMonitor;
 
-  constructor() {
+  constructor(private readonly subscriptionRepository: SubscriptionRepository) {
     const defaultNotifyChatId = Number(process.env.NOTIFY_CHAT_ID);
 
-    if (Number.isSafeInteger(defaultNotifyChatId)) {
-      this.stateStore.subscribeUser(defaultNotifyChatId);
-    }
+    new BookingSnapshotWorker(async (slots) => {
+      for (const chatId of this.stateStore.getSubscribedChatIds()) {
+        await this.bot.api.sendMessage(chatId, formatResults(slots));
+      }
+    });
 
     this.bot.command("subscribe", async (ctx) => {
-      console.log(`Chat id ${ctx.chatId} subscribed`);
+      const result = this.subscriptionRepository.createChatSubscription(
+        ctx.chatId,
+      );
 
-      this.stateStore.subscribeUser(ctx.chatId);
+      if (!result.ok) {
+        if (result.error === "SubscriptionAlreadyExists") {
+          console.warn(
+            `${result.error} | ${ctx.chatId} is already subscribed.`,
+          );
+          return await ctx.reply("You're already subscribed!");
+        } else {
+          return console.error(result.error);
+        }
+      }
 
-      await ctx.reply("You've been subscribed!");
+      if (result.ok) {
+        console.log(`Chat ID ${result.data.chatId} subscribed.`);
+        return await ctx.reply("You've been subscribed!");
+      }
     });
 
     this.bot.command("unsubscribe", async (ctx) => {
-      console.log(`Chat id ${ctx.chatId} unsubscribed`);
-
-      const wasSubscribed = this.stateStore.unsubscribeUser(ctx.chatId);
-
-      await ctx.reply(
-        wasSubscribed
-          ? "You've been unsubscribed."
-          : "You were not subscribed.",
+      const result = this.subscriptionRepository.removeChatSubscription(
+        ctx.chatId,
       );
+
+      if (!result.ok) {
+        if (result.error === "ErrorInexistentSubscription") {
+          console.warn(
+            `${result.error} | ${ctx.chatId} tried to unsubscribe without subscription.`,
+          );
+          return await ctx.reply("You weren't even subscribed.");
+        }
+
+        return console.error(result.error);
+      }
+
+      if (result.ok) {
+        console.log(`Chat ID ${result.data.chatId} has unsubscribed.`);
+        return await ctx.reply("You've been unsubscribed.");
+      }
     });
 
     this.bot.command("check", async (ctx) => {
       const result = await fetchAvailableBookingSlots();
 
       if (!result.ok) {
-        await ctx.reply(
-          `Failed to fetch data.\nError:${result.error}\nMessage:${result.message}`,
-        );
-        return;
+        console.error("ErrorAspApiFailed", result.error);
+        return await ctx.reply("Failed to fetch data.");
       }
 
-      await ctx.reply(formatResults(result.data));
+      if (result.data.length) {
+        return await ctx.reply(formatResults(result.data));
+      }
+
+      return await ctx.reply("There's no available dates.");
     });
   }
 
   async start() {
-    await this.bookingMonitor.start();
+    // await this.bookingMonitor.start();
     await this.bot.start();
   }
 
   async stop() {
     await this.bot.stop();
-    this.bookingMonitor.stop();
+    // this.bookingMonitor.stop();
   }
 
   async [Symbol.dispose]() {
