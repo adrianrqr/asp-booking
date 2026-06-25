@@ -71,11 +71,7 @@ export class SubscriptionRepositoryLive implements SubscriptionRepository {
 
   getSubscribedChats(): Result<Subscriptions> {
     try {
-      const result = this.db.query(`SELECT * FROM chat_subscription`).get();
-
-      if (!result) {
-        return { ok: false, error: "ErrorSelectingSubscriptions" };
-      }
+      const result = this.db.query(`SELECT * FROM chat_subscription`).all();
 
       const subscriptions = SubscriptionsSqlSchema(result);
 
